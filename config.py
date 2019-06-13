@@ -25,4 +25,5 @@ class Config:
         self.file_regex=config['file_regex']
         self.result_prefix=config['result_prefix']
         self.result_extension=config['result_extension']
+        self.encoding_input=config['encoding_input']
         

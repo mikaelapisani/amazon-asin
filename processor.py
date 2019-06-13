@@ -13,15 +13,14 @@ import logging
 import math
 import numpy as np
 import csv
+import os.path
 
-
-def get_delimiter(file_path):
+#return delimiter for a csv data
+def get_delimiter(file_path, encoding_data):
         sniffer = csv.Sniffer()
-        with open(file_path, 'r') as csvfile: 
+        with open(file_path, 'r', encoding=encoding_data) as csvfile: 
             dialect = sniffer.sniff(csvfile.read(1024), delimiters=";,\t|")
             return dialect.delimiter
-
-
 
 #get amount of chunks based on output_size_gb
 def get_chunks(output_size_mb, df):
@@ -36,12 +35,11 @@ def check_chunks(output_size_mb, df1, df2):
     return (chunks > 0)
  
 
-
 class Processor():
     def __init__(self, conf):
         self.config = conf
         #set logging configuration
-        logging.basicConfig(format='%(asctime)s - %(message)s')
+        logging.basicConfig(format='%(levelname)s:%(asctime)s - %(message)s')
         self.log = logging.getLogger()
         self.log.setLevel(logging.getLevelName(self.config.log_level))        
         self.dbx = DropboxHandler(self.config.access_token, self.config.dropbox_timeout, self.config.dropbox_chunck)
@@ -75,7 +73,23 @@ class Processor():
             for chunk in np.array_split(df, chunks):
                 idx = self.upload_file(chunk, idx)
         return idx
-            
+    
+    #read file and return dataframe        
+    def create_dataframe(self, local_path):    
+        try:
+            df = pd.read_csv(local_path, header=0, 
+                             sep = get_delimiter(local_path, self.config.encoding_input), 
+                             usecols=['asin'	, 'manufacturer','invalid'],
+                             dtype={'asin':object,'manufacturer':object,'invalid':object},
+                             encoding=self.config.encoding_input)
+        except Exception as err:
+            self.log.warning('Failed to process file:%s\n%s', local_path, err)
+            df = pd.read_excel(local_path, 
+                               header=0,  
+                             usecols=['asin'	, 'manufacturer','invalid'],
+                             dtype={'asin':object,'manufacturer':object,'invalid':object},
+                             encoding=self.config.encoding_input)
+        return df
 
     #list all files to process and for each append to df until reach threshold
     #once the threshold is reach, the file is uploaded and start to create another df
@@ -84,7 +98,6 @@ class Processor():
         df = pd.DataFrame(data={})
         idx=0
         for file in files:
-            self.log.debug('Processing folder %s', file)
             matcher = re.compile(self.config.file_regex)
             file_dir = file[0]
             filename = file[1]
@@ -93,19 +106,15 @@ class Processor():
                 try:
                     local_path = self.config.data_folder + filename
                     self.dbx.download_file(file_path, local_path)
-                    self.log.info('Processing file:%s', filename)
-                    df2 = pd.read_csv(local_path, header=0, sep = get_delimiter(local_path), 
-                         usecols=['asin'	, 'manufacturer','invalid'],
-                         dtype={'asin':object,'manufacturer':object,'invalid':object},
-                         encoding='utf-8')
+                    df2 = self.create_dataframe(local_path)
                     if (check_chunks(self.config.output_size_mb, df,df2)):
                         idx = self.save_data(df, idx)
                         df = df2
                     else:
                         df = df.append(df2)
-                    os.remove(file_path)
+                    os.remove(local_path)
                 except Exception as err:
-                    self.log.error('Failed processing file %s\n%s', file_path, err)
+                    self.log.error('Failed processing file %s\n%s', filename, err)
 
                 
         if (df.shape[0]>0):
